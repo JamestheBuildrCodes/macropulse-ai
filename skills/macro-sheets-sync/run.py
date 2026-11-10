@@ -171,6 +171,21 @@ def analyse(e):
     return {"fam": fam, "delta": delta, "pct": pct, "word": word, "read": read}
 
 
+WATCH = {
+    "inflation": "core rather than headline, and whether the move changes what the central bank does next",
+    "employment": "wages and unemployment alongside the headline count",
+    "growth": "revisions to earlier quarters and whether growth is broad",
+    "retail": "whether the rise is real spending or just prices",
+    "pmi": "the direction of change and the gap between orders and output",
+    "rates": "the guidance on future decisions more than the number",
+    "trade": "energy price distortions in the headline",
+    "sentiment": "whether the survey agrees with actual spending data",
+    "housing": "mortgage rates and inventory",
+    "speech": "whether the official contradicts the last policy statement",
+    "other": "the gap between forecast and delivery",
+}
+
+
 def main():
     if not TOKEN:
         print("GOOGLESHEETS_ACCESS_TOKEN missing")
@@ -236,6 +251,15 @@ def main():
             "" if an["delta"] is None else round(an["delta"], 4),
             "" if an["pct"] is None else round(an["pct"], 2),
             an["word"], an["read"],
+        ])
+
+    upcoming_high = [e for e in upcoming if e.get("impact") == "high"]
+    for e in upcoming_high[:60]:
+        fam = family(e.get("title"))
+        watch = WATCH.get(fam, "the gap between expected and delivered")
+        an_rows.append([
+            e.get("currency", ""), e.get("title", ""), fam, "", e.get("forecast", ""), "", "", "pending",
+            f"Not yet released. Expected {e.get('forecast') or 'n/a'} against {e.get('previous') or 'n/a'} last time. Watch {watch}.",
         ])
 
     al_rows = [["Sent", "Stage", "Event ID", "Status", "Channel", "Detail"]]
