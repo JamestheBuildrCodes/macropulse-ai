@@ -30,6 +30,10 @@ Requires `GOOGLESHEETS_ACCESS_TOKEN` (via `get_connector_token`). Reads Base44 d
 
 The workbook id is stored in `state.json` and reused. It is never recreated, so shared links and manual notes survive.
 
+## Companion watcher
+
+`macroUserWatch` (every 15 min via the "MacroPulse User Watch" workflow) pings the owner for each new signup and posts one user report per day. It also guards the numbers: `report` and `watch` are the only accepted actions.
+
 ## Notes
 
 - Every tab is rewritten in full each run. This is self-healing: a deleted row comes back, and there is no cursor drift.
