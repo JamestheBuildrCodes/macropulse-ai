@@ -592,6 +592,128 @@ async function outlookView(db: any) {
   return { text: out.join('\n') };
 }
 
+/* ---------- on-demand reviews ---------- */
+
+async function briefView(db: any, kind: string) {
+  const n = nowSec();
+  const all = liveOnly(await getEvents(db, { ts: { $gte: n - 8 * 86400 } }, 'ts', 300));
+  const done = all.filter((e) => e.actual && e.ts <= n);
+  const out: string[] = [];
+
+  if (kind === 'intel') {
+    const upcoming = liveOnly(await getEvents(db, { ts: { $gte: n } }, 'ts', 120));
+    out.push(`🧠 <b>Market intelligence</b>`);
+    out.push(``);
+    out.push(`What the calendar is weighted towards, and what has already surprised.`);
+    out.push(``);
+    const counts: Record<string, number> = {};
+    for (const e of upcoming) counts[e.currency] = (counts[e.currency] || 0) + 1;
+    const rank = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    if (rank.length) {
+      out.push(`<b>Busiest calendars</b>`);
+      for (const [c, v] of rank.slice(0, 3)) out.push(`• ${c} — ${v} releases ahead`);
+      out.push(``);
+    }
+    const highs = upcoming.filter((e) => e.impact === 'high').slice(0, 5);
+    if (highs.length) {
+      out.push(`<b>Next high impact</b>`);
+      for (const e of highs) out.push(`🔴 ${fmtStamp(e.ts)} — ${e.currency} ${esc(e.title)}${e.forecast ? ` <i>(expected ${esc(e.forecast)})</i>` : ''}`);
+      out.push(``);
+    }
+    const lean: Record<string, number> = {};
+    for (const e of done) {
+      const s = surpriseOf(e);
+      if (s && s.dir) lean[e.currency] = (lean[e.currency] || 0) + s.dir;
+    }
+    const l = Object.entries(lean).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    if (l.length) {
+      out.push(`<b>Where data has leaned</b>`);
+      for (const [c, v] of l.slice(0, 3)) out.push(`• ${c} — ${v > 0 ? 'stronger' : 'weaker'} over the last releases`);
+      out.push(``);
+    }
+    out.push(`<i>Read from the data, not from price. Information only.</i>`);
+    return out.join('\n');
+  }
+
+  if (kind === 'weekly') {
+    const start = n - 7 * 86400;
+    const week = done.filter((e) => e.ts >= start);
+    out.push(`📈 <b>Week in review</b>`);
+    out.push(`${week.length} releases with numbers over the last seven days`);
+    out.push(``);
+    const scored = week.map((e) => ({ e, s: surpriseOf(e) })).filter((x) => x.s && x.s.delta !== null)
+      .sort((a, b) => Math.abs(b.s!.pct ?? b.s!.delta ?? 0) - Math.abs(a.s!.pct ?? a.s!.delta ?? 0));
+    if (scored.length) {
+      out.push(`<b>Biggest surprises</b>`);
+      for (const x of scored.slice(0, 6)) out.push(`• ${x.e.currency} ${esc(x.e.title)}: ${esc(x.e.actual)} vs ${esc(x.e.forecast ?? 'n/a')} expected — ${x.s!.word}`);
+      out.push(``);
+    } else {
+      out.push(`Nothing moved far enough from forecast to count as a surprise.`);
+      out.push(``);
+    }
+    const ahead = liveOnly(await getEvents(db, { ts: { $gte: n } }, 'ts', 120)).filter((e) => e.impact === 'high').slice(0, 5);
+    if (ahead.length) {
+      out.push(`<b>Coming next</b>`);
+      for (const e of ahead) out.push(`🔴 ${fmtStamp(e.ts)} — ${e.currency} ${esc(e.title)}`);
+      out.push(``);
+    }
+    out.push(`<i>Times are WAT. Information only, never advice.</i>`);
+    return out.join('\n');
+  }
+
+  const start = dayStart(n);
+  const today = done.filter((e) => e.ts >= start);
+  out.push(`📊 <b>Day in review</b>`);
+  out.push(`${fmtDate(n)} · ${today.length} release${today.length === 1 ? '' : 's'} with numbers`);
+  out.push(``);
+  if (!today.length) {
+    out.push(`No tracked data has printed yet today.`);
+    out.push(``);
+    out.push(`When nothing is released, price usually follows positioning and whatever was said earlier in the week.`);
+  } else {
+    out.push(`<b>What came out</b>`);
+    for (const e of today.slice(0, 10)) {
+      const s = surpriseOf(e);
+      out.push(`• ${e.currency} ${esc(e.title)}: <b>${esc(e.actual)}</b>${s && s.delta !== null ? ` vs ${esc(e.forecast)} expected — ${s.word}` : ''}`);
+    }
+    out.push(``);
+    const lean: Record<string, number> = {};
+    for (const e of today) { const s = surpriseOf(e); if (s && s.dir) lean[e.currency] = (lean[e.currency] || 0) + s.dir; }
+    const l = Object.entries(lean).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    if (l.length) {
+      out.push(`<b>Where that leaves the currencies</b>`);
+      for (const [c, v] of l) out.push(`• ${c} — data leaned ${v > 0 ? 'stronger' : 'weaker'}`);
+      out.push(``);
+    }
+  }
+  out.push(`<i>Times are WAT. Information only, never advice.</i>`);
+  return out.join('\n');
+}
+
+function surpriseOf(e: any) {
+  const a = parseNum(e.actual), f = parseNum(e.forecast) ?? parseNum(e.previous);
+  if (a === null || f === null) return null;
+  const delta = a - f;
+  if (delta === 0) return { delta: 0, pct: 0, word: 'in line', dir: 0 };
+  const pct = f === 0 ? null : (delta / Math.abs(f)) * 100;
+  const scale = Math.abs(pct ?? delta);
+  const word = scale < 1.5 ? 'in line' : scale < 6 ? 'modest' : scale < 15 ? 'significant' : 'large';
+  const fam = familyOf(e);
+  const dir = fam === 'speech' || fam === 'other' ? 0 : Math.sign(delta);
+  return { delta, pct, word, dir };
+}
+
+function parseNum(v: any) {
+  if (v === null || v === undefined) return null;
+  const t = String(v).replace(/,/g, '').trim();
+  if (!t || /^(n\/a|na|-|--)$/i.test(t)) return null;
+  const m = t.match(/-?\d+(\.\d+)?/);
+  if (!m) return null;
+  let n = parseFloat(m[0]);
+  if (/[Kk]$/.test(t)) n *= 1e3; else if (/[Mm]$/.test(t)) n *= 1e6; else if (/[Bb]$/.test(t)) n *= 1e9;
+  return Number.isFinite(n) ? n : null;
+}
+
 /* ---------- router ---------- */
 
 async function handleUpdate(db: any, u: any) {
@@ -706,6 +828,11 @@ async function handleUpdate(db: any, u: any) {
   if (cmd === '/donate' || cmd === '/support') {
     const v = await donateView();
     await send(chat, v.text, v.kb ? { reply_markup: v.kb } : {});
+    return { ok: true };
+  }
+  if (cmd === '/review' || cmd === '/weekly' || cmd === '/analysis') {
+    const kind = cmd === '/review' ? 'daily' : cmd === '/weekly' ? 'weekly' : 'intel';
+    await send(chat, await briefView(db, kind));
     return { ok: true };
   }
   if (cmd === '/status') {
